@@ -340,6 +340,57 @@ class TestAuthEmailChange:
             session=main_session,
         )
 
+    @pytest.mark.htmx()
+    async def test_post_resend_same_email_within_cooldown(
+        self,
+        tenant_params: TenantParams,
+        csrf_token: str,
+        test_client_auth_csrf: httpx.AsyncClient,
+        main_session: AsyncSession,
+        send_task_mock: MagicMock,
+    ):
+        cookies = {}
+        cookies[settings.session_cookie_name] = tenant_params.session_token_token[0]
+        data = {
+            "email": "anne+updated@bretagne.duchy",
+            "current_password": "herminetincture",
+            "csrf_token": csrf_token,
+        }
+
+        # First request: issues a fresh code and sends the email
+        response = await test_client_auth_csrf.post(
+            f"{tenant_params.path_prefix}/email/change",
+            cookies=cookies,
+            data=data,
+        )
+        assert response.status_code == status.HTTP_202_ACCEPTED
+        send_task_mock.assert_called_once()
+
+        email_verification_repository = EmailVerificationRepository(main_session)
+        email_verifications = await email_verification_repository.get_by_user(
+            tenant_params.user.id
+        )
+        assert len(email_verifications) == 1
+        email_verification = email_verifications[0]
+
+        # Second request for the same email within the cooldown window:
+        # same response, but the pending code is reused and no new email is sent
+        send_task_mock.reset_mock()
+        response = await test_client_auth_csrf.post(
+            f"{tenant_params.path_prefix}/email/change",
+            cookies=cookies,
+            data=data,
+        )
+        assert response.status_code == status.HTTP_202_ACCEPTED
+
+        send_task_mock.assert_not_called()
+        email_verifications = await email_verification_repository.get_by_user(
+            tenant_params.user.id
+        )
+        assert len(email_verifications) == 1
+        assert email_verifications[0].id == email_verification.id
+        assert email_verifications[0].code == email_verification.code
+
 
 @pytest.mark.asyncio
 class TestAuthEmailVerify:

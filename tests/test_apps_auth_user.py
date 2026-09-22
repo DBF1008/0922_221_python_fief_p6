@@ -345,6 +345,88 @@ class TestUserChangeEmail:
             session=main_session,
         )
 
+    @pytest.mark.access_token(user="regular", acr=ACR.LEVEL_ONE)
+    async def test_resend_same_email_within_cooldown(
+        self,
+        test_data: TestData,
+        test_client_auth_access_token: httpx.AsyncClient,
+        send_task_mock: MagicMock,
+        main_session: AsyncSession,
+    ):
+        user = test_data["users"]["regular"]
+        tenant = user.tenant
+        path_prefix = tenant.slug if not tenant.default else ""
+
+        # First request: issues a fresh code and sends the email
+        response = await test_client_auth_access_token.patch(
+            f"{path_prefix}/api/email/change",
+            json={"email": "anne+updated@bretagne.duchy"},
+        )
+        assert response.status_code == status.HTTP_202_ACCEPTED
+        send_task_mock.assert_called_once()
+
+        email_verification_repository = EmailVerificationRepository(main_session)
+        email_verifications = await email_verification_repository.get_by_user(user.id)
+        assert len(email_verifications) == 1
+        email_verification = email_verifications[0]
+
+        # Second request for the same email within the cooldown window:
+        # same response, but the pending code is reused and no new email is sent
+        send_task_mock.reset_mock()
+        response = await test_client_auth_access_token.patch(
+            f"{path_prefix}/api/email/change",
+            json={"email": "anne+updated@bretagne.duchy"},
+        )
+        assert response.status_code == status.HTTP_202_ACCEPTED
+
+        send_task_mock.assert_not_called()
+        email_verifications = await email_verification_repository.get_by_user(user.id)
+        assert len(email_verifications) == 1
+        assert email_verifications[0].id == email_verification.id
+        assert email_verifications[0].code == email_verification.code
+
+    @pytest.mark.access_token(user="regular", acr=ACR.LEVEL_ONE)
+    async def test_change_to_another_email_within_cooldown(
+        self,
+        test_data: TestData,
+        test_client_auth_access_token: httpx.AsyncClient,
+        send_task_mock: MagicMock,
+        main_session: AsyncSession,
+    ):
+        user = test_data["users"]["regular"]
+        tenant = user.tenant
+        path_prefix = tenant.slug if not tenant.default else ""
+
+        # First request: issues a fresh code and sends the email
+        response = await test_client_auth_access_token.patch(
+            f"{path_prefix}/api/email/change",
+            json={"email": "anne+updated@bretagne.duchy"},
+        )
+        assert response.status_code == status.HTTP_202_ACCEPTED
+        send_task_mock.assert_called_once()
+
+        email_verification_repository = EmailVerificationRepository(main_session)
+        email_verifications = await email_verification_repository.get_by_user(user.id)
+        assert len(email_verifications) == 1
+        previous_email_verification = email_verifications[0]
+
+        # Changing to another email invalidates the previous code
+        # and sends a new verification email
+        send_task_mock.reset_mock()
+        response = await test_client_auth_access_token.patch(
+            f"{path_prefix}/api/email/change",
+            json={"email": "anne+updated-again@bretagne.duchy"},
+        )
+        assert response.status_code == status.HTTP_202_ACCEPTED
+
+        send_task_mock.assert_called_once()
+        email_verifications = await email_verification_repository.get_by_user(user.id)
+        assert len(email_verifications) == 1
+        email_verification = email_verifications[0]
+        assert email_verification.email == "anne+updated-again@bretagne.duchy"
+        assert email_verification.id != previous_email_verification.id
+        assert email_verification.code != previous_email_verification.code
+
 
 @pytest.mark.asyncio
 class TestUserVerifyEmail:

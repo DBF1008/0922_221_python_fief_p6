@@ -775,11 +775,19 @@ email_verifications: ModelMapping[EmailVerification] = {
         code=email_verification_codes["not_verified_email"][1],
         email=users["not_verified_email"].email,
         user=users["not_verified_email"],
+        # Created outside of the cooldown window, so a new verification
+        # request issues a fresh code instead of reusing this one.
+        created_at=datetime.now(UTC)
+        - timedelta(seconds=settings.email_verification_cooldown_seconds + 1),
     ),
     "regular_update_email": EmailVerification(
         code=email_verification_codes["regular_update_email"][1],
         email="anne+updated@bretagne.duchy",
         user=users["regular"],
+        # Created outside of the cooldown window, so a new verification
+        # request issues a fresh code instead of reusing this one.
+        created_at=datetime.now(UTC)
+        - timedelta(seconds=settings.email_verification_cooldown_seconds + 1),
     ),
 }
 

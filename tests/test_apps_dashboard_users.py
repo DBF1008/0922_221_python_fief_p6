@@ -1,4 +1,5 @@
 import uuid
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 import httpx
@@ -8,10 +9,12 @@ from fastapi import status
 
 from fief.db import AsyncSession
 from fief.repositories import (
+    EmailVerificationRepository,
     UserPermissionRepository,
     UserRepository,
     UserRoleRepository,
 )
+from fief.settings import settings
 from fief.tasks import (
     on_after_register,
     on_user_role_created,
@@ -421,6 +424,79 @@ class TestVerifyEmailRequest:
             send_task_mock=send_task_mock,
             session=main_session,
         )
+
+    @pytest.mark.authenticated_admin(mode="session")
+    @pytest.mark.htmx()
+    async def test_resend_within_cooldown_reuses_verification(
+        self,
+        test_client_dashboard: httpx.AsyncClient,
+        test_data: TestData,
+        send_task_mock: MagicMock,
+        main_session: AsyncSession,
+    ):
+        user = test_data["users"]["not_verified_email"]
+
+        # First request: issues a fresh code and sends the email
+        response = await test_client_dashboard.post(f"/users/{user.id}/verify-request")
+        assert response.status_code == status.HTTP_202_ACCEPTED
+        send_task_mock.assert_called_once()
+
+        email_verification_repository = EmailVerificationRepository(main_session)
+        email_verifications = await email_verification_repository.get_by_user(user.id)
+        assert len(email_verifications) == 1
+        email_verification = email_verifications[0]
+
+        # Second request within the cooldown window: same response,
+        # but the pending code is reused and no new email is sent
+        send_task_mock.reset_mock()
+        response = await test_client_dashboard.post(f"/users/{user.id}/verify-request")
+        assert response.status_code == status.HTTP_202_ACCEPTED
+
+        send_task_mock.assert_not_called()
+        email_verifications = await email_verification_repository.get_by_user(user.id)
+        assert len(email_verifications) == 1
+        assert email_verifications[0].id == email_verification.id
+        assert email_verifications[0].code == email_verification.code
+
+    @pytest.mark.authenticated_admin(mode="session")
+    @pytest.mark.htmx()
+    async def test_resend_after_cooldown_issues_new_verification(
+        self,
+        test_client_dashboard: httpx.AsyncClient,
+        test_data: TestData,
+        send_task_mock: MagicMock,
+        main_session: AsyncSession,
+    ):
+        user = test_data["users"]["not_verified_email"]
+
+        # First request: issues a fresh code and sends the email
+        response = await test_client_dashboard.post(f"/users/{user.id}/verify-request")
+        assert response.status_code == status.HTTP_202_ACCEPTED
+        send_task_mock.assert_called_once()
+
+        email_verification_repository = EmailVerificationRepository(main_session)
+        email_verifications = await email_verification_repository.get_by_user(user.id)
+        assert len(email_verifications) == 1
+        email_verification = email_verifications[0]
+
+        # Simulate the cooldown window elapsed since the first request
+        email_verification.created_at = datetime.now(UTC) - timedelta(
+            seconds=settings.email_verification_cooldown_seconds + 1
+        )
+        main_session.add(email_verification)
+        await main_session.commit()
+
+        # Second request after the cooldown window:
+        # a fresh code is issued and a new email is sent
+        send_task_mock.reset_mock()
+        response = await test_client_dashboard.post(f"/users/{user.id}/verify-request")
+        assert response.status_code == status.HTTP_202_ACCEPTED
+
+        send_task_mock.assert_called_once()
+        email_verifications = await email_verification_repository.get_by_user(user.id)
+        assert len(email_verifications) == 1
+        assert email_verifications[0].id != email_verification.id
+        assert email_verifications[0].code != email_verification.code
 
 
 @pytest.mark.asyncio

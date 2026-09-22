@@ -1,5 +1,6 @@
 import json
 import uuid
+from datetime import UTC, datetime, timedelta
 
 from fastapi import Request
 from furl import furl
@@ -162,6 +163,23 @@ class UserManager:
                 raise UserAlreadyExistsError()  # noqa: TRY301
             except UserDoesNotExistError:
                 pass
+
+        existing_email_verifications = (
+            await self.email_verification_repository.get_by_user(user.id)
+        )
+        cooldown_threshold = datetime.now(UTC) - timedelta(
+            seconds=settings.email_verification_cooldown_seconds
+        )
+        for existing_email_verification in existing_email_verifications:
+            if (
+                existing_email_verification.email == email
+                and not existing_email_verification.is_expired
+                and existing_email_verification.created_at >= cooldown_threshold
+            ):
+                # A verification for this email was requested recently:
+                # reuse the still-valid code instead of invalidating it
+                # and sending another email.
+                return
 
         await self.email_verification_repository.delete_by_user(user.id)
         code, code_hash = generate_verify_code()

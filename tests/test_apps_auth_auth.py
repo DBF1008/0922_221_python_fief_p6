@@ -1,4 +1,5 @@
 import urllib.parse
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 import httpx
@@ -783,11 +784,12 @@ class TestAuthVerifyEmailRequest:
             session=main_session,
         )
 
-    async def test_resend(
+    async def test_resend_within_cooldown_reuses_verification(
         self,
         test_client_auth: httpx.AsyncClient,
         test_data: TestData,
         main_session: AsyncSession,
+        send_task_mock: MagicMock,
     ):
         user = test_data["users"]["not_verified_email"]
         tenant = user.tenant
@@ -797,21 +799,79 @@ class TestAuthVerifyEmailRequest:
             "not_verified_email"
         ][0]
 
-        # First request
+        # First request: issues a fresh code and sends the email
         response = await test_client_auth.get(
             f"{path_prefix}/verify-request", cookies=cookies
         )
         assert response.status_code == status.HTTP_302_FOUND
-
-        # Second request
-        response = await test_client_auth.get(
-            f"{path_prefix}/verify-request", cookies=cookies
-        )
-        assert response.status_code == status.HTTP_302_FOUND
+        send_task_mock.assert_called_once()
 
         email_verification_repository = EmailVerificationRepository(main_session)
         email_verifications = await email_verification_repository.get_by_user(user.id)
         assert len(email_verifications) == 1
+        email_verification = email_verifications[0]
+
+        # Second request within the cooldown window: same response,
+        # but the pending code is reused and no new email is sent
+        send_task_mock.reset_mock()
+        response = await test_client_auth.get(
+            f"{path_prefix}/verify-request", cookies=cookies
+        )
+        assert response.status_code == status.HTTP_302_FOUND
+
+        send_task_mock.assert_not_called()
+        email_verifications = await email_verification_repository.get_by_user(user.id)
+        assert len(email_verifications) == 1
+        assert email_verifications[0].id == email_verification.id
+        assert email_verifications[0].code == email_verification.code
+
+    async def test_resend_after_cooldown_issues_new_verification(
+        self,
+        test_client_auth: httpx.AsyncClient,
+        test_data: TestData,
+        main_session: AsyncSession,
+        send_task_mock: MagicMock,
+    ):
+        user = test_data["users"]["not_verified_email"]
+        tenant = user.tenant
+        path_prefix = tenant.slug if not tenant.default else ""
+        cookies = {}
+        cookies[settings.session_cookie_name] = session_token_tokens[
+            "not_verified_email"
+        ][0]
+
+        # First request: issues a fresh code and sends the email
+        response = await test_client_auth.get(
+            f"{path_prefix}/verify-request", cookies=cookies
+        )
+        assert response.status_code == status.HTTP_302_FOUND
+        send_task_mock.assert_called_once()
+
+        email_verification_repository = EmailVerificationRepository(main_session)
+        email_verifications = await email_verification_repository.get_by_user(user.id)
+        assert len(email_verifications) == 1
+        email_verification = email_verifications[0]
+
+        # Simulate the cooldown window elapsed since the first request
+        email_verification.created_at = datetime.now(UTC) - timedelta(
+            seconds=settings.email_verification_cooldown_seconds + 1
+        )
+        main_session.add(email_verification)
+        await main_session.commit()
+
+        # Second request after the cooldown window:
+        # a fresh code is issued and a new email is sent
+        send_task_mock.reset_mock()
+        response = await test_client_auth.get(
+            f"{path_prefix}/verify-request", cookies=cookies
+        )
+        assert response.status_code == status.HTTP_302_FOUND
+
+        send_task_mock.assert_called_once()
+        email_verifications = await email_verification_repository.get_by_user(user.id)
+        assert len(email_verifications) == 1
+        assert email_verifications[0].id != email_verification.id
+        assert email_verifications[0].code != email_verification.code
 
 
 @pytest.mark.asyncio

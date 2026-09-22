@@ -345,6 +345,34 @@ class TestUserChangeEmail:
             session=main_session,
         )
 
+    @pytest.mark.access_token(user="regular", acr=ACR.LEVEL_ONE)
+    async def test_resend_reuses_pending_verification(
+        self,
+        test_data: TestData,
+        test_client_auth_access_token: httpx.AsyncClient,
+        send_task_mock: MagicMock,
+        main_session: AsyncSession,
+    ):
+        user = test_data["users"]["regular"]
+        tenant = user.tenant
+        path_prefix = tenant.slug if not tenant.default else ""
+        email = "anne+resend-api@bretagne.duchy"
+
+        for _ in range(2):
+            response = await test_client_auth_access_token.patch(
+                f"{path_prefix}/api/email/change",
+                json={"email": email},
+            )
+            assert response.status_code == status.HTTP_202_ACCEPTED
+
+        await email_verification_requested_assertions(
+            user=user,
+            email=email,
+            send_task_mock=send_task_mock,
+            session=main_session,
+        )
+        send_task_mock.assert_called_once()
+
 
 @pytest.mark.asyncio
 class TestUserVerifyEmail:

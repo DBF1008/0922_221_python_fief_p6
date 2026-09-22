@@ -340,6 +340,39 @@ class TestAuthEmailChange:
             session=main_session,
         )
 
+    @pytest.mark.htmx()
+    async def test_post_resend_reuses_pending_verification(
+        self,
+        tenant_params: TenantParams,
+        csrf_token: str,
+        test_client_auth_csrf: httpx.AsyncClient,
+        main_session: AsyncSession,
+        send_task_mock: MagicMock,
+    ):
+        email = f"anne+resend-form@{tenant_params.user.email.split('@', 1)[1]}"
+        cookies = {}
+        cookies[settings.session_cookie_name] = tenant_params.session_token_token[0]
+
+        for _ in range(2):
+            response = await test_client_auth_csrf.post(
+                f"{tenant_params.path_prefix}/email/change",
+                cookies=cookies,
+                data={
+                    "email": email,
+                    "current_password": "herminetincture",
+                    "csrf_token": csrf_token,
+                },
+            )
+            assert response.status_code == status.HTTP_202_ACCEPTED
+
+        await email_verification_requested_assertions(
+            user=tenant_params.user,
+            email=email,
+            send_task_mock=send_task_mock,
+            session=main_session,
+        )
+        send_task_mock.assert_called_once()
+
 
 @pytest.mark.asyncio
 class TestAuthEmailVerify:

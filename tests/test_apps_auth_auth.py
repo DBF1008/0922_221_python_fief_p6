@@ -788,6 +788,7 @@ class TestAuthVerifyEmailRequest:
         test_client_auth: httpx.AsyncClient,
         test_data: TestData,
         main_session: AsyncSession,
+        send_task_mock: MagicMock,
     ):
         user = test_data["users"]["not_verified_email"]
         tenant = user.tenant
@@ -803,6 +804,13 @@ class TestAuthVerifyEmailRequest:
         )
         assert response.status_code == status.HTTP_302_FOUND
 
+        await email_verification_requested_assertions(
+            user=user,
+            email=user.email,
+            send_task_mock=send_task_mock,
+            session=main_session,
+        )
+
         # Second request
         response = await test_client_auth.get(
             f"{path_prefix}/verify-request", cookies=cookies
@@ -812,6 +820,7 @@ class TestAuthVerifyEmailRequest:
         email_verification_repository = EmailVerificationRepository(main_session)
         email_verifications = await email_verification_repository.get_by_user(user.id)
         assert len(email_verifications) == 1
+        send_task_mock.assert_called_once()
 
 
 @pytest.mark.asyncio

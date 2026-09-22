@@ -1,5 +1,6 @@
 import json
 import uuid
+from datetime import UTC, datetime, timedelta
 
 from fastapi import Request
 from furl import furl
@@ -152,7 +153,7 @@ class UserManager:
 
     async def request_verify_email(
         self, user: User, email: str, *, request: Request | None = None
-    ) -> None:
+    ) -> bool:
         if not user.is_active:
             raise UserInactiveError()
 
@@ -162,6 +163,21 @@ class UserManager:
                 raise UserAlreadyExistsError()  # noqa: TRY301
             except UserDoesNotExistError:
                 pass
+
+        existing_email_verification = (
+            await self.email_verification_repository.get_latest_by_user(user.id)
+        )
+        now = datetime.now(UTC)
+        cooldown_started_at = now - timedelta(
+            seconds=settings.email_verification_resend_cooldown_seconds
+        )
+        if (
+            existing_email_verification is not None
+            and not existing_email_verification.is_expired
+            and existing_email_verification.email.lower() == email.lower()
+            and existing_email_verification.created_at >= cooldown_started_at
+        ):
+            return False
 
         await self.email_verification_repository.delete_by_user(user.id)
         code, code_hash = generate_verify_code()
@@ -173,6 +189,7 @@ class UserManager:
         await self.on_after_request_verify_email(
             email_verification, code, request=request
         )
+        return True
 
     async def verify_email(
         self, user: User, code: str, *, request: Request | None = None

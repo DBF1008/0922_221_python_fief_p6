@@ -411,9 +411,12 @@ class TestVerifyEmailRequest:
         main_session: AsyncSession,
     ):
         user = test_data["users"]["not_verified_email"]
-        response = await test_client_dashboard.post(f"/users/{user.id}/verify-request")
+        for _ in range(2):
+            response = await test_client_dashboard.post(
+                f"/users/{user.id}/verify-request"
+            )
 
-        assert response.status_code == status.HTTP_202_ACCEPTED
+            assert response.status_code == status.HTTP_202_ACCEPTED
 
         await email_verification_requested_assertions(
             user=user,
@@ -421,6 +424,7 @@ class TestVerifyEmailRequest:
             send_task_mock=send_task_mock,
             session=main_session,
         )
+        send_task_mock.assert_called_once()
 
 
 @pytest.mark.asyncio

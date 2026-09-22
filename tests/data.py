@@ -775,11 +775,15 @@ email_verifications: ModelMapping[EmailVerification] = {
         code=email_verification_codes["not_verified_email"][1],
         email=users["not_verified_email"].email,
         user=users["not_verified_email"],
+        created_at=datetime.now(tz=UTC) - timedelta(minutes=10),
+        updated_at=datetime.now(tz=UTC) - timedelta(minutes=10),
     ),
     "regular_update_email": EmailVerification(
         code=email_verification_codes["regular_update_email"][1],
         email="anne+updated@bretagne.duchy",
         user=users["regular"],
+        created_at=datetime.now(tz=UTC) - timedelta(minutes=10),
+        updated_at=datetime.now(tz=UTC) - timedelta(minutes=10),
     ),
 }
 

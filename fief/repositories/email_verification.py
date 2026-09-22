@@ -27,3 +27,12 @@ class EmailVerificationRepository(
     async def get_by_user(self, user: UUID4) -> list[EmailVerification]:
         statement = select(EmailVerification).where(EmailVerification.user_id == user)
         return await self.list(statement)
+
+    async def get_latest_by_user(self, user: UUID4) -> EmailVerification | None:
+        statement = (
+            select(EmailVerification)
+            .where(EmailVerification.user_id == user)
+            .order_by(EmailVerification.created_at.desc())
+            .limit(1)
+        )
+        return await self.get_one_or_none(statement)

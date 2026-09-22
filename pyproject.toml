@@ -240,7 +240,7 @@ dependencies = [
     "sendgrid ==6.11.0",
     "psycopg2 ==2.9.10",
     "pycountry >=23,<25",
-    "python-slugify ==8.0.4",
+    "python-slugify ==9.1.0",
     "pytz ==2024.2",
     "rich ==13.9.4",
     "sentry_dramatiq ==0.3.3",
